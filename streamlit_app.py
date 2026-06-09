@@ -335,8 +335,7 @@ page = st.sidebar.radio(
         "Settings",
     ],
 )
-
- if page == "Dashboard":
+if page == "Dashboard":
     dashboard()
 elif page == "Procurement Intelligence":
     procurement()
