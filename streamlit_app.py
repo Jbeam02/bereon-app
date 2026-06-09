@@ -2,13 +2,14 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from statistics import median
-from collections import defaultdict
+from collections import defaultdict, Counter
+from datetime import datetime
 
 st.set_page_config(page_title="Bereon Aviation Intelligence", layout="wide")
 
 DATA_DIR = Path("DATA")
 
-VISIBLE_CONDITIONS = ["OH", "RP", "IN", "SV", "NE"]
+VISIBLE_CONDITIONS = ["OH", "RP", "IN", "NE"]
 
 COND_MAP = {
     "overhauled": "OH",
@@ -20,19 +21,18 @@ COND_MAP = {
     "inspected": "IN",
     "inspected/tested": "IN",
     "in": "IN",
-    "serviceable": "SV",
-    "sv": "SV",
     "new_item": "NE",
     "new item": "NE",
     "new": "NE",
     "ne": "NE",
-    "factory new": "NE",
+    "serviceable": "SV",
+    "sv": "SV",
     "as removed": "AR",
     "as_removed": "AR",
     "ar": "AR",
 }
 
-CONDITION_RANK = {
+COND_RANK = {
     "NE": 6,
     "OH": 5,
     "RP": 4,
@@ -42,78 +42,10 @@ CONDITION_RANK = {
     "": 0,
 }
 
-PART_COLUMNS = [
-    "PART #", "Part #", "Part Number", "PART NUMBER", "P/N", "PN",
-    "Part No", "PART NO", "Part", "Item", "Item Number"
-]
-
-COND_COLUMNS = [
-    "Condition", "CONDITION", "Cond", "COND", "CD", "Code"
-]
-
-BUY_PRICE_COLUMNS = [
-    "EXCH FEE / COST EA",
-    "EXCH. FEE",
-    "COST PER UNIT",
-    "Cost Per Unit",
-    "Unit Cost",
-    "Cost",
-    "Purchase Price",
-    "PO Price",
-    "Price Paid",
-    "Unit Price",
-    "OUTRIGHT VALUE",
-    "Outright Value",
-    "Price",
-    "Amount",
-]
-
-SELL_PRICE_COLUMNS = [
-    "EXCH FEE / SALES EA",
-    "Exchange Fee / Sales EA",
-    "Price Per Unit",
-    "PRICE PER UNIT",
-    "Unit Price",
-    "Unit Amount",
-    "Sell Price",
-    "Sale Price",
-    "Sales Price",
-    "SO Price",
-    "Invoice Price",
-    "Sold Price",
-    "Sold For",
-    "OUTRIGHT VALUE",
-    "Outright Value",
-    "Price",
-    "Amount",
-    "Revenue",
-    "Line Total",
-    "Total",
-    "Net",
-]
-
-VENDOR_COLUMNS = [
-    "Vendor", "VENDOR", "Vendor Name", "Company", "Supplier",
-    "Purchased From", "PURCHASED FROM"
-]
-
-CUSTOMER_COLUMNS = [
-    "Customer", "CUSTOMER", "Customer Name", "Company"
-]
-
-DATE_COLUMNS = [
-    "Date", "DATE", "Quote Date", "QUOTE DATE", "CREATED/UPDATED",
-    "Created/Updated", "Created Date", "Date Created", "PO Date",
-    "Order Date", "SO Date", "Sales Date", "Invoice Date"
-]
-
-TAG_DATE_COLUMNS = [
-    "TAG DATE", "Tag Date", "Tag", "Cert Date", "Certification Date"
-]
-
-TAGGED_BY_COLUMNS = [
-    "TAGGED BY", "Tagged By", "Tag By"
-]
+INCOMING_FILE = "incoming_quotes.csv"
+OUTGOING_FILE = "outgoing_quotes.csv"
+PO_FILE = "purchase_orders.csv"
+SO_FILE = "sales_orders.csv"
 
 
 def clean(value):
@@ -139,34 +71,19 @@ def fmt_money(value):
     return f"${value:,.2f}"
 
 
-def compact(value):
-    return str(value).lower().replace(" ", "").replace("/", "").replace("#", "").replace(".", "").replace("_", "")
-
-
-def find_column(df, possible_names):
-    if df.empty:
+def parse_date(value):
+    try:
+        dt = pd.to_datetime(value, errors="coerce")
+        if pd.isna(dt):
+            return None
+        return dt
+    except:
         return None
 
-    for col in df.columns:
-        for name in possible_names:
-            if clean(col).lower() == name.lower():
-                return col
 
-    compact_map = {compact(col): col for col in df.columns}
-
-    for name in possible_names:
-        key = compact(name)
-        if key in compact_map:
-            return compact_map[key]
-
-    for col in df.columns:
-        col_key = compact(col)
-        for name in possible_names:
-            name_key = compact(name)
-            if name_key and (name_key in col_key or col_key in name_key):
-                return col
-
-    return None
+def normalize_cond(value):
+    text = clean(value).lower()
+    return COND_MAP.get(text, clean(value).upper())
 
 
 @st.cache_data
@@ -190,95 +107,105 @@ def read_csv_file(filename):
     return df
 
 
-def load_backend_file(filename):
-    df = read_csv_file(filename)
+@st.cache_data
+def load_all_data():
+    incoming = read_csv_file(INCOMING_FILE)
+    outgoing = read_csv_file(OUTGOING_FILE)
+    purchase_orders = read_csv_file(PO_FILE)
+    sales_orders = read_csv_file(SO_FILE)
 
-    if df.empty:
-        st.warning(f"No saved DATA/{filename} found or file could not be read.")
-    else:
-        st.success(f"Using saved file: DATA/{filename} — {len(df):,} rows")
-
-    return df
-
-
-def get_value(row, possible_columns):
-    for col in possible_columns:
-        if col in row:
-            return clean(row[col])
-
-    row_keys = list(row.index)
-
-    for key in row_keys:
-        for col in possible_columns:
-            if clean(key).lower() == col.lower():
-                return clean(row[key])
-
-    for key in row_keys:
-        key_compact = compact(key)
-        for col in possible_columns:
-            col_compact = compact(col)
-            if col_compact and (col_compact in key_compact or key_compact in col_compact):
-                return clean(row[key])
-
-    return ""
+    return incoming, outgoing, purchase_orders, sales_orders
 
 
-def get_condition(row):
-    raw = get_value(row, COND_COLUMNS)
-    raw_clean = raw.lower().strip()
-    return COND_MAP.get(raw_clean, raw.upper())
-
-
-def get_price(row, side="buy"):
-    columns = BUY_PRICE_COLUMNS if side == "buy" else SELL_PRICE_COLUMNS
-
-    for col in columns:
-        value = get_value(row, [col])
-        price = money(value)
-        if price and price > 1:
-            return price
-
-    return None
-
-
-def get_vendor(row):
-    return get_value(row, VENDOR_COLUMNS)
-
-
-def get_customer(row):
-    return get_value(row, CUSTOMER_COLUMNS)
-
-
-def filter_part(df, part_number):
-    if df.empty or not part_number:
+def exact_part_filter(df, column, part):
+    if df.empty or column not in df.columns:
         return pd.DataFrame()
 
-    part_col = find_column(df, PART_COLUMNS)
-
-    if part_col is None:
-        st.error("No part-number column found in this file.")
-        return pd.DataFrame()
-
-    search = part_number.strip().upper()
-    mask = df[part_col].astype(str).str.strip().str.upper() == search
+    search = part.strip().upper()
+    mask = df[column].astype(str).str.strip().str.upper() == search
 
     return df.loc[mask].copy()
 
 
-def pricing_guidance(matches, side="buy"):
-    by_condition = defaultdict(list)
+def incoming_matches(incoming, part):
+    return exact_part_filter(incoming, "PART #", part)
 
-    for _, row in matches.iterrows():
-        cond = get_condition(row)
-        price = get_price(row, side=side)
 
-        if cond in VISIBLE_CONDITIONS and price:
-            by_condition[cond].append(price)
+def outgoing_matches(outgoing, part):
+    return exact_part_filter(outgoing, "Part #", part)
 
+
+def po_matches(po, part):
+    matches = exact_part_filter(po, "PART NUMBER", part)
+
+    if "CANCELLED" in matches.columns:
+        matches = matches[
+            ~matches["CANCELLED"].astype(str).str.lower().isin(
+                ["true", "yes", "y", "1", "cancelled", "canceled"]
+            )
+        ]
+
+    return matches
+
+
+def so_matches(so, part):
+    matches = exact_part_filter(so, "PART #", part)
+
+    if "CANCELLED" in matches.columns:
+        matches = matches[
+            ~matches["CANCELLED"].astype(str).str.lower().isin(
+                ["true", "yes", "y", "1", "cancelled", "canceled"]
+            )
+        ]
+
+    return matches
+
+
+def condition_counts(df, cond_col):
+    counts = Counter()
+
+    if df.empty or cond_col not in df.columns:
+        return counts
+
+    for value in df[cond_col]:
+        cond = normalize_cond(value)
+        if cond:
+            counts[cond] += 1
+
+    return counts
+
+
+def pricing_by_condition(df, cond_col, price_cols):
+    by_cond = defaultdict(list)
+
+    if df.empty or cond_col not in df.columns:
+        return by_cond
+
+    for _, row in df.iterrows():
+        cond = normalize_cond(row.get(cond_col, ""))
+
+        if cond not in VISIBLE_CONDITIONS:
+            continue
+
+        price = None
+
+        for price_col in price_cols:
+            if price_col in row:
+                price = money(row.get(price_col))
+                if price and price > 1:
+                    break
+
+        if price and price > 1:
+            by_cond[cond].append(price)
+
+    return by_cond
+
+
+def guidance_table(by_cond, mode):
     rows = []
 
     for cond in VISIBLE_CONDITIONS:
-        prices = by_condition.get(cond, [])
+        prices = by_cond.get(cond, [])
 
         if not prices:
             continue
@@ -294,7 +221,7 @@ def pricing_guidance(matches, side="buy"):
 
         med = median(prices)
 
-        if side == "buy":
+        if mode == "buy":
             rows.append({
                 "Condition": cond,
                 "Target Buy": fmt_money(med * 0.90),
@@ -314,30 +241,46 @@ def pricing_guidance(matches, side="buy"):
     return pd.DataFrame(rows)
 
 
-def ranked_buy_options(matches):
+def best_value_from_incoming(df):
     rows = []
 
-    for _, row in matches.iterrows():
-        cond = get_condition(row)
-        price = get_price(row, side="buy")
-        vendor = get_vendor(row)
+    if df.empty:
+        return pd.DataFrame()
+
+    for _, row in df.iterrows():
+        cond = normalize_cond(row.get("COND", ""))
+        price = money(row.get("COST PER UNIT"))
+
+        if not price:
+            price = money(row.get("EXCH. FEE"))
 
         if cond not in VISIBLE_CONDITIONS or not price:
             continue
 
         score = 0
-        score += CONDITION_RANK.get(cond, 0) * 25
+        score += COND_RANK.get(cond, 0) * 25
         score -= price / 1000
 
-        tag_date = get_value(row, TAG_DATE_COLUMNS)
-        tagged_by = get_value(row, TAGGED_BY_COLUMNS)
+        qty = money(row.get("QTY"))
+        if qty and qty >= 2:
+            score += 5
+
+        warranty = clean(row.get("WARRANTY"))
+        if "12" in warranty or "year" in warranty.lower():
+            score += 15
+        elif "6" in warranty:
+            score += 8
+        elif warranty:
+            score += 3
 
         rows.append({
-            "Vendor": vendor,
+            "Vendor": clean(row.get("VENDOR")),
             "Condition": cond,
             "Price": fmt_money(price),
-            "Tag Date": tag_date,
-            "Tagged By": tagged_by,
+            "Qty": clean(row.get("QTY")),
+            "Tagged By": clean(row.get("TAGGED BY")),
+            "Tag Date": clean(row.get("TAG DATE")),
+            "Warranty": warranty,
             "Bereon Score": round(score, 2),
         })
 
@@ -347,73 +290,308 @@ def ranked_buy_options(matches):
     return pd.DataFrame(rows).sort_values("Bereon Score", ascending=False)
 
 
-def quote_stats(matches):
-    prices = []
+def cheapest_usable_from_incoming(df):
+    rows = []
 
-    for _, row in matches.iterrows():
-        price = get_price(row, side="sell")
-        if price:
-            prices.append(price)
+    for _, row in df.iterrows():
+        cond = normalize_cond(row.get("COND", ""))
+        price = money(row.get("COST PER UNIT"))
 
-    if not prices:
+        if not price:
+            price = money(row.get("EXCH. FEE"))
+
+        if cond not in VISIBLE_CONDITIONS or not price:
+            continue
+
+        rows.append({
+            "Vendor": clean(row.get("VENDOR")),
+            "Condition": cond,
+            "Price": price,
+            "Price Display": fmt_money(price),
+            "Qty": clean(row.get("QTY")),
+            "Tag Date": clean(row.get("TAG DATE")),
+            "Warranty": clean(row.get("WARRANTY")),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df_out = pd.DataFrame(rows).sort_values("Price", ascending=True)
+    return df_out.drop(columns=["Price"])
+
+
+def last_record(df, date_col):
+    if df.empty or date_col not in df.columns:
         return None
 
-    return {
-        "average": sum(prices) / len(prices),
-        "median": median(prices),
-        "low": min(prices),
-        "high": max(prices),
-        "count": len(prices),
-    }
+    temp = df.copy()
+    temp["_parsed_date"] = temp[date_col].apply(parse_date)
+    temp = temp.dropna(subset=["_parsed_date"])
+
+    if temp.empty:
+        return None
+
+    temp = temp.sort_values("_parsed_date", ascending=False)
+    return temp.iloc[0]
 
 
-def show_raw(matches):
-    with st.expander("Raw matching records"):
-        st.dataframe(matches.head(100), use_container_width=True)
+def show_metric_row(records):
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Incoming Quotes", records["incoming"])
+    c2.metric("Outgoing Quotes", records["outgoing"])
+    c3.metric("Purchase Orders", records["po"])
+    c4.metric("Sales Orders", records["so"])
 
 
-def dashboard():
-    st.title("Bereon Aviation Intelligence Platform")
-    st.write("Search Support Air backend CSV data by part number.")
-    st.info("Current mode: CSV backend files in DATA folder.")
+def show_last_purchase(po_df):
+    st.subheader("Last Purchase")
 
+    last = last_record(po_df, "DATE CREATED")
 
-def procurement():
-    st.title("Procurement Intelligence")
-    st.caption("What To Buy For")
-
-    source = st.radio(
-        "Data source",
-        ["Incoming Quotes", "Purchase Orders"],
-        horizontal=True,
-    )
-
-    if source == "Incoming Quotes":
-        df = load_backend_file("incoming_quotes.csv")
-        side = "buy"
-    else:
-        df = load_backend_file("purchase_orders.csv")
-        side = "buy"
-
-    if df.empty:
+    if last is None:
+        st.info("No purchase history found.")
         return
 
-    part = st.text_input("Search Part Number")
+    price = money(last.get("EXCH FEE / COST EA"))
+    if not price:
+        price = money(last.get("OUTRIGHT VALUE"))
+
+    st.write(
+        f"**{clean(last.get('VENDOR'))}** | "
+        f"{normalize_cond(last.get('CONDITION'))} | "
+        f"{fmt_money(price)} | "
+        f"{clean(last.get('DATE CREATED'))}"
+    )
+
+
+def show_last_sale(so_df):
+    st.subheader("Last Sale")
+
+    last = last_record(so_df, "DATE CREATED")
+
+    if last is None:
+        st.info("No sales history found.")
+        return
+
+    price = money(last.get("EXCH FEE / SALES EA"))
+    if not price:
+        price = money(last.get("OUTRIGHT VALUE"))
+    if not price:
+        price = money(last.get("AMOUNT PAID"))
+
+    st.write(
+        f"**{clean(last.get('CUSTOMER'))}** | "
+        f"{normalize_cond(last.get('CD'))} | "
+        f"{fmt_money(price)} | "
+        f"{clean(last.get('DATE CREATED'))}"
+    )
+
+
+def intelligence_search():
+    st.title("Bereon Intelligence Search")
+    st.caption("One part number search across buying, quoting, purchase history, and sales history.")
+
+    incoming, outgoing, po, so = load_all_data()
+
+    with st.expander("Backend data status", expanded=False):
+        st.write(f"Incoming Quotes: {len(incoming):,} rows")
+        st.write(f"Outgoing Quotes: {len(outgoing):,} rows")
+        st.write(f"Purchase Orders: {len(po):,} rows")
+        st.write(f"Sales Orders: {len(so):,} rows")
+
+    part = st.text_input("Search Part Number", placeholder="Example: 3202222-1")
 
     if not part:
         return
 
-    matches = filter_part(df, part)
+    inc = incoming_matches(incoming, part)
+    out = outgoing_matches(outgoing, part)
+    po_part = po_matches(po, part)
+    so_part = so_matches(so, part)
 
-    if matches.empty:
+    st.success(f"Search complete for {part.upper()}")
+
+    show_metric_row({
+        "incoming": len(inc),
+        "outgoing": len(out),
+        "po": len(po_part),
+        "so": len(so_part),
+    })
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Executive Summary",
+        "Buy Intelligence",
+        "Quote Intelligence",
+        "Purchase History",
+        "Sales History",
+    ])
+
+    with tab1:
+        st.header("Executive Summary")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            show_last_purchase(po_part)
+
+        with col2:
+            show_last_sale(so_part)
+
+        st.subheader("Condition Snapshot")
+
+        incoming_counts = condition_counts(inc, "COND")
+        outgoing_counts = condition_counts(out, "Condition")
+        po_counts = condition_counts(po_part, "CONDITION")
+        so_counts = condition_counts(so_part, "CD")
+
+        snapshot_rows = []
+
+        for cond in ["NE", "OH", "RP", "IN", "SV", "AR"]:
+            total = (
+                incoming_counts.get(cond, 0)
+                + outgoing_counts.get(cond, 0)
+                + po_counts.get(cond, 0)
+                + so_counts.get(cond, 0)
+            )
+
+            if total:
+                snapshot_rows.append({
+                    "Condition": cond,
+                    "Incoming Quotes": incoming_counts.get(cond, 0),
+                    "Outgoing Quotes": outgoing_counts.get(cond, 0),
+                    "Purchase Orders": po_counts.get(cond, 0),
+                    "Sales Orders": so_counts.get(cond, 0),
+                    "Total": total,
+                })
+
+        if snapshot_rows:
+            st.dataframe(pd.DataFrame(snapshot_rows), use_container_width=True)
+        else:
+            st.info("No condition data found.")
+
+    with tab2:
+        st.header("Buy Intelligence")
+
+        incoming_buy = pricing_by_condition(
+            inc,
+            "COND",
+            ["COST PER UNIT", "EXCH. FEE"],
+        )
+
+        po_buy = pricing_by_condition(
+            po_part,
+            "CONDITION",
+            ["EXCH FEE / COST EA", "OUTRIGHT VALUE"],
+        )
+
+        st.subheader("Incoming Quote Buy Guidance")
+        incoming_guidance = guidance_table(incoming_buy, "buy")
+
+        if incoming_guidance.empty:
+            st.info("No incoming quote pricing found.")
+        else:
+            st.dataframe(incoming_guidance, use_container_width=True)
+
+        st.subheader("Purchase Order Buy Guidance")
+        po_guidance = guidance_table(po_buy, "buy")
+
+        if po_guidance.empty:
+            st.info("No purchase order pricing found.")
+        else:
+            st.dataframe(po_guidance, use_container_width=True)
+
+        st.subheader("Best Value Options")
+        best_value = best_value_from_incoming(inc)
+
+        if best_value.empty:
+            st.info("No best value options found.")
+        else:
+            st.dataframe(best_value.head(15), use_container_width=True)
+
+        st.subheader("Cheapest Usable")
+        cheapest = cheapest_usable_from_incoming(inc)
+
+        if cheapest.empty:
+            st.info("No cheapest usable options found.")
+        else:
+            st.dataframe(cheapest.head(10), use_container_width=True)
+
+    with tab3:
+        st.header("Quote Intelligence")
+
+        outgoing_sell = pricing_by_condition(
+            out,
+            "Condition",
+            ["Price Per Unit"],
+        )
+
+        sales_sell = pricing_by_condition(
+            so_part,
+            "CD",
+            ["EXCH FEE / SALES EA", "OUTRIGHT VALUE", "AMOUNT PAID"],
+        )
+
+        st.subheader("Outgoing Quote Guidance")
+        out_guidance = guidance_table(outgoing_sell, "sell")
+
+        if out_guidance.empty:
+            st.info("No outgoing quote pricing found.")
+        else:
+            st.dataframe(out_guidance, use_container_width=True)
+
+        st.subheader("Completed Sales Guidance")
+        sales_guidance = guidance_table(sales_sell, "sell")
+
+        if sales_guidance.empty:
+            st.info("No completed sales pricing found.")
+        else:
+            st.dataframe(sales_guidance, use_container_width=True)
+
+        if not out.empty:
+            with st.expander("Raw outgoing quotes"):
+                st.dataframe(out.head(100), use_container_width=True)
+
+    with tab4:
+        st.header("Purchase History")
+
+        if po_part.empty:
+            st.info("No purchase order history found.")
+        else:
+            st.dataframe(po_part.head(100), use_container_width=True)
+
+    with tab5:
+        st.header("Sales History")
+
+        if so_part.empty:
+            st.info("No sales order history found.")
+        else:
+            st.dataframe(so_part.head(100), use_container_width=True)
+
+
+def procurement_page():
+    st.title("Procurement Intelligence")
+    st.caption("Original dedicated buying view")
+
+    incoming = read_csv_file(INCOMING_FILE)
+
+    st.success(f"Using saved file: DATA/{INCOMING_FILE} — {len(incoming):,} rows")
+
+    part = st.text_input("Search Part Number", key="procurement_part")
+
+    if not part:
+        return
+
+    inc = incoming_matches(incoming, part)
+
+    if inc.empty:
         st.warning("No matching records found.")
         return
 
-    st.success(f"Found {len(matches):,} record(s) for {part.upper()}")
+    st.success(f"Found {len(inc):,} record(s) for {part.upper()}")
 
-    guidance = pricing_guidance(matches, side=side)
-
+    buy = pricing_by_condition(inc, "COND", ["COST PER UNIT", "EXCH. FEE"])
     st.subheader("Buy Range Recommendations")
+    guidance = guidance_table(buy, "buy")
 
     if guidance.empty:
         st.info("No usable pricing found.")
@@ -421,102 +599,52 @@ def procurement():
         st.dataframe(guidance, use_container_width=True)
 
     st.subheader("Best Value Options")
+    best_value = best_value_from_incoming(inc)
 
-    ranked = ranked_buy_options(matches)
-
-    if ranked.empty:
-        st.info("No ranked buy options found.")
+    if best_value.empty:
+        st.info("No best value options found.")
     else:
-        st.dataframe(ranked.head(20), use_container_width=True)
-
-        best = ranked.iloc[0]
-        st.success(
-            f"Best Value: {best['Vendor']} | {best['Condition']} | {best['Price']}"
-        )
-
-    show_raw(matches)
+        st.dataframe(best_value.head(20), use_container_width=True)
 
 
-def quote():
+def quote_page():
     st.title("Quote Intelligence")
-    st.caption("What To Quote")
 
-    df = load_backend_file("outgoing_quotes.csv")
+    outgoing = read_csv_file(OUTGOING_FILE)
 
-    if df.empty:
-        return
+    st.success(f"Using saved file: DATA/{OUTGOING_FILE} — {len(outgoing):,} rows")
 
     part = st.text_input("Search Part Number", key="quote_part")
 
     if not part:
         return
 
-    matches = filter_part(df, part)
+    out = outgoing_matches(outgoing, part)
 
-    if matches.empty:
+    if out.empty:
         st.warning("No matching quote records found.")
         return
 
-    st.success(f"Found {len(matches):,} quote record(s) for {part.upper()}")
+    st.success(f"Found {len(out):,} quote record(s) for {part.upper()}")
 
-    st.subheader("Quote Range Recommendations")
-
-    guidance = pricing_guidance(matches, side="sell")
+    sell = pricing_by_condition(out, "Condition", ["Price Per Unit"])
+    guidance = guidance_table(sell, "sell")
 
     if guidance.empty:
         st.info("No usable quote pricing found.")
     else:
         st.dataframe(guidance, use_container_width=True)
 
-    stats = quote_stats(matches)
 
-    if stats:
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Records", stats["count"])
-        c2.metric("Average", fmt_money(stats["average"]))
-        c3.metric("Median", fmt_money(stats["median"]))
-        c4.metric("Low", fmt_money(stats["low"]))
-        c5.metric("High", fmt_money(stats["high"]))
-
-    show_raw(matches)
-
-
-def market():
+def market_page():
     st.title("Market Intelligence")
-    st.caption("Sales history lookup for now")
-
-    df = load_backend_file("sales_orders.csv")
-
-    if df.empty:
-        return
-
-    part = st.text_input("Search Part Number", key="market_part")
-
-    if not part:
-        st.dataframe(df.head(100), use_container_width=True)
-        return
-
-    matches = filter_part(df, part)
-
-    if matches.empty:
-        st.warning("No matching sales records found.")
-        return
-
-    st.success(f"Found {len(matches):,} sales record(s) for {part.upper()}")
-
-    guidance = pricing_guidance(matches, side="sell")
-
-    if not guidance.empty:
-        st.subheader("Sales-Based Quote Intelligence")
-        st.dataframe(guidance, use_container_width=True)
-
-    show_raw(matches)
+    st.info("Market Intelligence will later include ILS call-list ranking and supplier scoring.")
+    st.write("For now, use Bereon Intelligence Search for the combined view.")
 
 
-def settings():
+def settings_page():
     st.title("Settings")
-    st.write("Bereon CSV backend mode")
-    st.write("Expected files:")
+    st.write("Bereon backend mode: CSV")
     st.code(
         "DATA/incoming_quotes.csv\n"
         "DATA/outgoing_quotes.csv\n"
@@ -530,7 +658,7 @@ st.sidebar.title("Bereon")
 page = st.sidebar.radio(
     "Navigation",
     [
-        "Dashboard",
+        "Bereon Intelligence Search",
         "Procurement Intelligence",
         "Quote Intelligence",
         "Market Intelligence",
@@ -538,13 +666,13 @@ page = st.sidebar.radio(
     ],
 )
 
-if page == "Dashboard":
-    dashboard()
+if page == "Bereon Intelligence Search":
+    intelligence_search()
 elif page == "Procurement Intelligence":
-    procurement()
+    procurement_page()
 elif page == "Quote Intelligence":
-    quote()
+    quote_page()
 elif page == "Market Intelligence":
-    market()
+    market_page()
 elif page == "Settings":
-    settings()
+    settings_page()
