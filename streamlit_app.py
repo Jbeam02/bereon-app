@@ -11,7 +11,7 @@ CONDITIONS = ["OH", "RP", "IN", "SV", "NE"]
 
 PART_COLUMNS = ["PART #", "Part #", "Part Number", "PART NUMBER", "P/N", "PN", "Part No", "PART NO", "Part"]
 COND_COLUMNS = ["Condition", "CONDITION", "Cond", "COND"]
-PRICE_COLUMNS = ["Price", "PRICE", "Cost", "COST", "Unit Cost", "Cost Per Unit", "COST PER UNIT", "Unit Price", "Amount"]
+PRICE_COLUMNS = ["Price", "PRICE", "Cost", "COST", "Unit Cost", "Cost Per Unit", "COST PER UNIT", "Unit Price", "Amount", "OUTRIGHT VALUE"]
 VENDOR_COLUMNS = ["Vendor", "VENDOR", "Vendor Name", "Company", "Supplier", "Purchased From"]
 
 
@@ -32,8 +32,8 @@ def fmt_money(v):
 
 
 def find_column(df, possible):
-    for name in possible:
-        for col in df.columns:
+    for col in df.columns:
+        for name in possible:
             if str(col).strip().lower() == name.strip().lower():
                 return col
 
@@ -48,37 +48,38 @@ def find_column(df, possible):
 
 
 @st.cache_data
-def read_saved_file(filename):
+def read_csv_file(filename):
     path = DATA_DIR / filename
 
     if not path.exists():
         return pd.DataFrame()
 
-    if filename.lower().endswith(".csv"):
-        df = pd.read_csv(path)
-    else:
-        df = pd.read_excel(path)
+    try:
+        df = pd.read_csv(path, low_memory=False, encoding="utf-8")
+    except:
+        try:
+            df = pd.read_csv(path, low_memory=False, encoding="latin1")
+        except Exception as e:
+            st.error(f"Could not read DATA/{filename}: {e}")
+            return pd.DataFrame()
 
     df = df.fillna("")
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
 
-@st.cache_data
-def read_uploaded_file(uploaded_file):
-    if uploaded_file is None:
+def filter_part(df, part_number):
+    if df.empty or not part_number:
         return pd.DataFrame()
 
-    name = uploaded_file.name.lower()
+    part_col = find_column(df, PART_COLUMNS)
 
-    if name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    if part_col is None:
+        st.error("No part-number column found in this file.")
+        return pd.DataFrame()
 
-    df = df.fillna("")
-    df.columns = [str(c).strip() for c in df.columns]
-    return df
+    mask = df[part_col].astype(str).str.strip().str.upper() == part_number.strip().upper()
+    return df.loc[mask].copy()
 
 
 def get_cell(row, columns):
@@ -95,20 +96,6 @@ def get_price(row):
             if val and val > 1:
                 return val
     return None
-
-
-def filter_part(df, part_number):
-    if df.empty or not part_number:
-        return pd.DataFrame()
-
-    part_col = find_column(df, PART_COLUMNS)
-
-    if part_col is None:
-        st.error("No part-number column found.")
-        return pd.DataFrame()
-
-    mask = df[part_col].astype(str).str.strip().str.upper() == part_number.strip().upper()
-    return df.loc[mask].copy()
 
 
 def pricing_guidance(matches):
@@ -144,7 +131,6 @@ def pricing_guidance(matches):
 
 def ranked_buy_options(matches):
     rows = []
-
     rank = {"NE": 6, "OH": 5, "RP": 4, "SV": 3, "IN": 2}
 
     for _, row in matches.iterrows():
@@ -161,38 +147,29 @@ def ranked_buy_options(matches):
             "Vendor": vendor,
             "Condition": cond,
             "Price": fmt_money(price),
-            "Raw Price": price,
             "Bereon Score": round(score, 2),
         })
 
     if not rows:
         return pd.DataFrame()
 
-    df = pd.DataFrame(rows).sort_values("Bereon Score", ascending=False)
-    return df.drop(columns=["Raw Price"])
+    return pd.DataFrame(rows).sort_values("Bereon Score", ascending=False)
 
 
-def load_data_box(saved_filename, upload_key):
-    saved_df = read_saved_file(saved_filename)
+def load_backend_file(filename):
+    df = read_csv_file(filename)
 
-    if not saved_df.empty:
-        st.success(f"Using saved file: DATA/{saved_filename} — {len(saved_df):,} rows")
-        return saved_df
-
-    st.warning(f"No saved DATA/{saved_filename} found.")
-    uploaded = st.file_uploader("Upload file instead", type=["xlsx", "xls", "csv"], key=upload_key)
-    df = read_uploaded_file(uploaded)
-
-    if not df.empty:
-        st.success(f"Uploaded {len(df):,} rows")
+    if df.empty:
+        st.warning(f"No saved DATA/{filename} found or file could not be read.")
+    else:
+        st.success(f"Using saved file: DATA/{filename} — {len(df):,} rows")
 
     return df
 
 
 def dashboard():
     st.title("Bereon Aviation Intelligence Platform")
-    st.write("Search aviation part numbers using saved Support Air data.")
-    st.info("Add Excel files to a GitHub folder named DATA so you do not have to upload every time.")
+    st.write("Search Support Air backend CSV data by part number.")
 
 
 def procurement():
@@ -202,9 +179,9 @@ def procurement():
     source = st.radio("Data source", ["Incoming Quotes", "Purchase Orders"], horizontal=True)
 
     if source == "Incoming Quotes":
-        df = load_data_box("incoming_quotes.xlsx", "incoming_upload")
+        df = load_backend_file("incoming_quotes.csv")
     else:
-        df = load_data_box("purchase_orders.xlsx", "po_upload")
+        df = load_backend_file("purchase_orders.csv")
 
     if df.empty:
         return
@@ -246,7 +223,7 @@ def quote():
     st.title("Quote Intelligence")
     st.caption("What To Quote")
 
-    df = load_data_box("outgoing_quotes.xlsx", "outgoing_upload")
+    df = load_backend_file("outgoing_quotes.csv")
 
     if df.empty:
         return
@@ -273,12 +250,8 @@ def quote():
     else:
         st.dataframe(guidance, use_container_width=True)
 
-    prices = []
-
-    for _, row in matches.iterrows():
-        price = get_price(row)
-        if price:
-            prices.append(price)
+    prices = [get_price(row) for _, row in matches.iterrows()]
+    prices = [p for p in prices if p]
 
     if prices:
         c1, c2, c3, c4 = st.columns(4)
@@ -293,8 +266,9 @@ def quote():
 
 def market():
     st.title("Market Intelligence")
+    st.caption("Sales history lookup for now")
 
-    df = load_data_box("market.xlsx", "market_upload")
+    df = load_backend_file("sales_orders.csv")
 
     if df.empty:
         return
@@ -308,23 +282,26 @@ def market():
     matches = filter_part(df, part)
 
     if matches.empty:
-        st.warning("No matching market records found.")
+        st.warning("No matching sales records found.")
     else:
-        st.success(f"Found {len(matches):,} market record(s)")
+        st.success(f"Found {len(matches):,} sales record(s)")
         st.dataframe(matches.head(100), use_container_width=True)
 
 
 def settings():
     st.title("Settings")
-    st.write("Bereon v1")
-    st.write("Saved data folder: DATA")
-    st.write("Expected saved filenames:")
+    st.write("Bereon CSV backend mode")
+    st.write("Expected files:")
     st.code(
-        "incoming_quotes.xlsx\npurchase_orders.xlsx\noutgoing_quotes.xlsx\nmarket.xlsx"
+        "DATA/incoming_quotes.csv\n"
+        "DATA/outgoing_quotes.csv\n"
+        "DATA/purchase_orders.csv\n"
+        "DATA/sales_orders.csv"
     )
 
 
 st.sidebar.title("Bereon")
+
 page = st.sidebar.radio(
     "Navigation",
     [
@@ -335,6 +312,7 @@ page = st.sidebar.radio(
         "Settings",
     ],
 )
+
 if page == "Dashboard":
     dashboard()
 elif page == "Procurement Intelligence":
