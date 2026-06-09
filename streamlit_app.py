@@ -1,89 +1,71 @@
 import streamlit as st
 import pandas as pd
+from pathlib import Path
 from statistics import median
 
 st.set_page_config(page_title="Bereon Aviation Intelligence", layout="wide")
 
-CONDITION_RANK = {
-    "NE": 6,
-    "OH": 5,
-    "RP": 4,
-    "SV": 3,
-    "IN": 2,
-    "AR": 1,
-    "": 0,
-}
+DATA_DIR = Path("DATA")
 
-VISIBLE_CONDITIONS = ["OH", "RP", "IN", "SV", "NE"]
+CONDITIONS = ["OH", "RP", "IN", "SV", "NE"]
 
-PART_COLUMNS = [
-    "PART #", "Part #", "Part Number", "PART NUMBER", "P/N", "PN",
-    "Part No", "PART NO", "Item", "Item Number", "Part"
-]
-
+PART_COLUMNS = ["PART #", "Part #", "Part Number", "PART NUMBER", "P/N", "PN", "Part No", "PART NO", "Part"]
 COND_COLUMNS = ["Condition", "CONDITION", "Cond", "COND"]
-
-PRICE_COLUMNS = [
-    "Price", "PRICE", "Cost", "COST", "Unit Cost", "COST PER UNIT",
-    "Cost Per Unit", "Unit Price", "Amount", "OUTRIGHT VALUE",
-    "EXCH FEE / COST EA"
-]
-
-DATE_COLUMNS = [
-    "Date", "DATE", "Quote Date", "PO Date", "SO Date",
-    "Created Date", "Date Created", "Order Date"
-]
-
-VENDOR_COLUMNS = [
-    "Vendor", "VENDOR", "Vendor Name", "Company", "Supplier",
-    "Purchased From"
-]
+PRICE_COLUMNS = ["Price", "PRICE", "Cost", "COST", "Unit Cost", "Cost Per Unit", "COST PER UNIT", "Unit Price", "Amount"]
+VENDOR_COLUMNS = ["Vendor", "VENDOR", "Vendor Name", "Company", "Supplier", "Purchased From"]
 
 
-def clean(value):
-    if pd.isna(value):
-        return ""
-    return str(value).strip()
+def clean(v):
+    return "" if pd.isna(v) else str(v).strip()
 
 
-def money(value):
+def money(v):
     try:
-        if pd.isna(value):
-            return None
-        text = str(value).replace("$", "").replace(",", "").strip()
-        if text == "":
-            return None
-        return float(text)
+        text = clean(v).replace("$", "").replace(",", "")
+        return float(text) if text else None
     except:
         return None
 
 
-def fmt_money(value):
-    if value is None:
-        return "N/A"
-    return f"${value:,.2f}"
+def fmt_money(v):
+    return "N/A" if v is None else f"${v:,.2f}"
 
 
-def find_column(df, possible_names):
-    compact_cols = {c.lower().replace(" ", "").replace("/", "").replace("#", ""): c for c in df.columns}
-
-    for name in possible_names:
-        key = name.lower().replace(" ", "").replace("/", "").replace("#", "")
-        if key in compact_cols:
-            return compact_cols[key]
+def find_column(df, possible):
+    for name in possible:
+        for col in df.columns:
+            if str(col).strip().lower() == name.strip().lower():
+                return col
 
     for col in df.columns:
-        col_key = col.lower().replace(" ", "").replace("/", "").replace("#", "")
-        for name in possible_names:
-            key = name.lower().replace(" ", "").replace("/", "").replace("#", "")
-            if key in col_key or col_key in key:
+        c = str(col).lower().replace(" ", "").replace("/", "").replace("#", "")
+        for name in possible:
+            n = name.lower().replace(" ", "").replace("/", "").replace("#", "")
+            if n in c or c in n:
                 return col
 
     return None
 
 
 @st.cache_data
-def read_file(uploaded_file):
+def read_saved_file(filename):
+    path = DATA_DIR / filename
+
+    if not path.exists():
+        return pd.DataFrame()
+
+    if filename.lower().endswith(".csv"):
+        df = pd.read_csv(path)
+    else:
+        df = pd.read_excel(path)
+
+    df = df.fillna("")
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
+
+
+@st.cache_data
+def read_uploaded_file(uploaded_file):
     if uploaded_file is None:
         return pd.DataFrame()
 
@@ -91,14 +73,28 @@ def read_file(uploaded_file):
 
     if name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
-    elif name.endswith(".xlsx") or name.endswith(".xls"):
-        df = pd.read_excel(uploaded_file)
     else:
-        return pd.DataFrame()
+        df = pd.read_excel(uploaded_file)
 
     df = df.fillna("")
     df.columns = [str(c).strip() for c in df.columns]
     return df
+
+
+def get_cell(row, columns):
+    for col in columns:
+        if col in row:
+            return clean(row[col])
+    return ""
+
+
+def get_price(row):
+    for col in PRICE_COLUMNS:
+        if col in row:
+            val = money(row[col])
+            if val and val > 1:
+                return val
+    return None
 
 
 def filter_part(df, part_number):
@@ -108,291 +104,224 @@ def filter_part(df, part_number):
     part_col = find_column(df, PART_COLUMNS)
 
     if part_col is None:
-        st.warning("No part-number column found. Select one manually.")
-        part_col = st.selectbox("Part number column", df.columns)
+        st.error("No part-number column found.")
+        return pd.DataFrame()
 
     mask = df[part_col].astype(str).str.strip().str.upper() == part_number.strip().upper()
     return df.loc[mask].copy()
 
 
-def get_condition(row):
-    for col in COND_COLUMNS:
-        if col in row:
-            return clean(row[col]).upper()
-    return ""
+def pricing_guidance(matches):
+    by_cond = {}
 
-
-def get_price(row):
-    for col in PRICE_COLUMNS:
-        if col in row:
-            value = money(row[col])
-            if value is not None and value > 1:
-                return value
-    return None
-
-
-def get_vendor(row):
-    for col in VENDOR_COLUMNS:
-        if col in row:
-            return clean(row[col])
-    return ""
-
-
-def pricing_guidance(df):
-    results = {}
-
-    if df.empty:
-        return results
-
-    for _, row in df.iterrows():
-        cond = get_condition(row)
+    for _, row in matches.iterrows():
+        cond = get_cell(row, COND_COLUMNS).upper()
         price = get_price(row)
 
-        if cond not in VISIBLE_CONDITIONS:
-            continue
+        if cond in CONDITIONS and price:
+            by_cond.setdefault(cond, []).append(price)
 
-        if price is None:
-            continue
+    rows = []
 
-        if cond not in results:
-            results[cond] = []
-
-        results[cond].append(price)
-
-    guidance = {}
-
-    for cond, prices in results.items():
-        prices = sorted(prices)
-
-        if len(prices) >= 4:
-            med = median(prices)
-            prices = [p for p in prices if med * 0.5 <= p <= med * 1.5]
+    for cond in CONDITIONS:
+        prices = by_cond.get(cond, [])
 
         if not prices:
             continue
 
         med = median(prices)
 
-        guidance[cond] = {
-            "low": med * 0.90,
-            "target": med,
-            "high": med * 1.10,
-            "count": len(prices),
-        }
+        rows.append({
+            "Condition": cond,
+            "Low": fmt_money(med * 0.90),
+            "Target": fmt_money(med),
+            "High": fmt_money(med * 1.10),
+            "Records": len(prices),
+        })
 
-    return guidance
+    return pd.DataFrame(rows)
 
 
-def best_buy_options(df):
-    if df.empty:
-        return pd.DataFrame()
-
+def ranked_buy_options(matches):
     rows = []
 
-    for _, row in df.iterrows():
-        cond = get_condition(row)
+    rank = {"NE": 6, "OH": 5, "RP": 4, "SV": 3, "IN": 2}
+
+    for _, row in matches.iterrows():
+        cond = get_cell(row, COND_COLUMNS).upper()
         price = get_price(row)
-        vendor = get_vendor(row)
+        vendor = get_cell(row, VENDOR_COLUMNS)
 
-        if cond not in VISIBLE_CONDITIONS:
+        if cond not in CONDITIONS or not price:
             continue
 
-        if price is None:
-            continue
-
-        score = 0
-        score += CONDITION_RANK.get(cond, 0) * 25
-        score -= price / 1000
+        score = rank.get(cond, 0) * 25 - price / 1000
 
         rows.append({
             "Vendor": vendor,
             "Condition": cond,
-            "Price": price,
+            "Price": fmt_money(price),
+            "Raw Price": price,
             "Bereon Score": round(score, 2),
         })
 
     if not rows:
         return pd.DataFrame()
 
-    output = pd.DataFrame(rows)
-    output = output.sort_values("Bereon Score", ascending=False)
-    return output
+    df = pd.DataFrame(rows).sort_values("Bereon Score", ascending=False)
+    return df.drop(columns=["Raw Price"])
 
 
-def show_pricing_table(title, guidance):
-    st.subheader(title)
+def load_data_box(saved_filename, upload_key):
+    saved_df = read_saved_file(saved_filename)
 
-    if not guidance:
-        st.info("No usable pricing records found.")
-        return
+    if not saved_df.empty:
+        st.success(f"Using saved file: DATA/{saved_filename} — {len(saved_df):,} rows")
+        return saved_df
 
-    rows = []
+    st.warning(f"No saved DATA/{saved_filename} found.")
+    uploaded = st.file_uploader("Upload file instead", type=["xlsx", "xls", "csv"], key=upload_key)
+    df = read_uploaded_file(uploaded)
 
-    for cond in VISIBLE_CONDITIONS:
-        if cond not in guidance:
-            continue
+    if not df.empty:
+        st.success(f"Uploaded {len(df):,} rows")
 
-        info = guidance[cond]
-
-        rows.append({
-            "Condition": cond,
-            "Low": fmt_money(info["low"]),
-            "Target": fmt_money(info["target"]),
-            "High": fmt_money(info["high"]),
-            "Records": info["count"],
-        })
-
-    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    return df
 
 
-def dashboard_page():
+def dashboard():
     st.title("Bereon Aviation Intelligence Platform")
-    st.caption("Internal aviation sourcing, buying, quoting, and market intelligence for Support Air.")
+    st.write("Search aviation part numbers using saved Support Air data.")
+    st.info("Add Excel files to a GitHub folder named DATA so you do not have to upload every time.")
 
-    st.write("Use the sidebar to open Procurement Intelligence, Quote Intelligence, or Market Intelligence.")
 
-
-def procurement_page():
+def procurement():
     st.title("Procurement Intelligence")
     st.caption("What To Buy For")
 
-    uploaded_file = st.file_uploader(
-        "Upload incoming quotes, PO history, or ILS market Excel/CSV file",
-        type=["xlsx", "xls", "csv"],
-        key="procurement_file"
-    )
+    source = st.radio("Data source", ["Incoming Quotes", "Purchase Orders"], horizontal=True)
 
-    df = read_file(uploaded_file)
+    if source == "Incoming Quotes":
+        df = load_data_box("incoming_quotes.xlsx", "incoming_upload")
+    else:
+        df = load_data_box("purchase_orders.xlsx", "po_upload")
 
     if df.empty:
-        st.info("Upload a file to begin.")
         return
 
-    st.success(f"Loaded {len(df):,} rows")
-    st.dataframe(df.head(50), use_container_width=True)
+    part = st.text_input("Search Part Number")
 
-    part_number = st.text_input("Enter exact part number")
-
-    if not part_number:
+    if not part:
         return
 
-    matches = filter_part(df, part_number)
+    matches = filter_part(df, part)
 
     if matches.empty:
         st.warning("No matching records found.")
         return
 
-    st.success(f"Found {len(matches):,} matching record(s)")
+    st.success(f"Found {len(matches):,} record(s) for {part.upper()}")
 
+    st.subheader("Buy Range Recommendations")
     guidance = pricing_guidance(matches)
-    show_pricing_table("Buy Range Recommendations", guidance)
 
-    ranked = best_buy_options(matches)
+    if guidance.empty:
+        st.info("No usable pricing found.")
+    else:
+        st.dataframe(guidance, use_container_width=True)
 
     st.subheader("Best Value Options")
+    ranked = ranked_buy_options(matches)
 
     if ranked.empty:
-        st.info("No usable buy options found.")
+        st.info("No ranked buy options found.")
     else:
         st.dataframe(ranked.head(20), use_container_width=True)
 
-        best = ranked.iloc[0]
-        st.success(
-            f"Best Value: {best['Vendor']} | {best['Condition']} | {fmt_money(best['Price'])}"
-        )
-
-    with st.expander("Matching raw records"):
+    with st.expander("Raw matching records"):
         st.dataframe(matches.head(100), use_container_width=True)
 
 
-def quote_page():
+def quote():
     st.title("Quote Intelligence")
     st.caption("What To Quote")
 
-    uploaded_file = st.file_uploader(
-        "Upload outgoing quote history, sales history, or quote Excel/CSV file",
-        type=["xlsx", "xls", "csv"],
-        key="quote_file"
-    )
-
-    df = read_file(uploaded_file)
+    df = load_data_box("outgoing_quotes.xlsx", "outgoing_upload")
 
     if df.empty:
-        st.info("Upload a file to begin.")
         return
 
-    st.success(f"Loaded {len(df):,} rows")
-    st.dataframe(df.head(50), use_container_width=True)
+    part = st.text_input("Search Part Number", key="quote_part")
 
-    part_number = st.text_input("Enter exact part number", key="quote_part")
-
-    if not part_number:
+    if not part:
         return
 
-    matches = filter_part(df, part_number)
+    matches = filter_part(df, part)
 
     if matches.empty:
         st.warning("No matching quote records found.")
         return
 
-    st.success(f"Found {len(matches):,} matching quote record(s)")
+    st.success(f"Found {len(matches):,} quote record(s) for {part.upper()}")
 
     guidance = pricing_guidance(matches)
-    show_pricing_table("Quote Range Recommendations", guidance)
+
+    st.subheader("Quote Range Recommendations")
+
+    if guidance.empty:
+        st.info("No usable quote pricing found.")
+    else:
+        st.dataframe(guidance, use_container_width=True)
 
     prices = []
 
     for _, row in matches.iterrows():
         price = get_price(row)
-        if price is not None:
+        if price:
             prices.append(price)
 
     if prices:
-        st.metric("Average Quote", fmt_money(sum(prices) / len(prices)))
-        st.metric("Median Quote", fmt_money(median(prices)))
-        st.metric("High Quote", fmt_money(max(prices)))
-        st.metric("Low Quote", fmt_money(min(prices)))
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Average", fmt_money(sum(prices) / len(prices)))
+        c2.metric("Median", fmt_money(median(prices)))
+        c3.metric("Low", fmt_money(min(prices)))
+        c4.metric("High", fmt_money(max(prices)))
 
-    with st.expander("Matching raw quote records"):
+    with st.expander("Raw matching records"):
         st.dataframe(matches.head(100), use_container_width=True)
 
 
-def market_page():
+def market():
     st.title("Market Intelligence")
-    st.caption("Simple market file viewer and part lookup")
 
-    uploaded_file = st.file_uploader(
-        "Upload market file",
-        type=["xlsx", "xls", "csv"],
-        key="market_file"
-    )
-
-    df = read_file(uploaded_file)
+    df = load_data_box("market.xlsx", "market_upload")
 
     if df.empty:
-        st.info("Upload a file to begin.")
         return
 
-    st.success(f"Loaded {len(df):,} rows")
-    st.dataframe(df.head(100), use_container_width=True)
+    part = st.text_input("Search Part Number", key="market_part")
 
-    part_number = st.text_input("Enter exact part number", key="market_part")
+    if not part:
+        st.dataframe(df.head(100), use_container_width=True)
+        return
 
-    if part_number:
-        matches = filter_part(df, part_number)
+    matches = filter_part(df, part)
 
-        if matches.empty:
-            st.warning("No matching market records found.")
-        else:
-            st.success(f"Found {len(matches):,} matching record(s)")
-            st.dataframe(matches.head(100), use_container_width=True)
+    if matches.empty:
+        st.warning("No matching market records found.")
+    else:
+        st.success(f"Found {len(matches):,} market record(s)")
+        st.dataframe(matches.head(100), use_container_width=True)
 
 
-def settings_page():
+def settings():
     st.title("Settings")
     st.write("Bereon v1")
-    st.write("Browser-safe mode is ON.")
-    st.write("Large files are previewed at 50–100 rows to prevent crashing.")
+    st.write("Saved data folder: DATA")
+    st.write("Expected saved filenames:")
+    st.code(
+        "incoming_quotes.xlsx\npurchase_orders.xlsx\noutgoing_quotes.xlsx\nmarket.xlsx"
+    )
 
 
 st.sidebar.title("Bereon")
@@ -404,16 +333,16 @@ page = st.sidebar.radio(
         "Quote Intelligence",
         "Market Intelligence",
         "Settings",
-    ]
+    ],
 )
 
-if page == "Dashboard":
-    dashboard_page()
+ if page == "Dashboard":
+    dashboard()
 elif page == "Procurement Intelligence":
-    procurement_page()
+    procurement()
 elif page == "Quote Intelligence":
-    quote_page()
+    quote()
 elif page == "Market Intelligence":
-    market_page()
+    market()
 elif page == "Settings":
-    settings_page()
+    settings()
