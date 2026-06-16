@@ -12,8 +12,60 @@ import bereon_engine as engine
 
 st.set_page_config(page_title="Bereon Aviation Intelligence", layout="wide")
 
+USERS = {
+    "Jbeam21": "Bereon2026",
+    "Operations": "Supportair2026",
+}
+
 DATA_DIR = Path("DATA")
 
+
+# ----------------------------
+# LOGIN / LOGOUT
+# ----------------------------
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if "username" not in st.session_state:
+    st.session_state.username = ""
+
+if not st.session_state.authenticated:
+    st.title("Bereon Aviation Intelligence Platform")
+    st.caption("Internal Procurement Intelligence System")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username in USERS and USERS[username] == password:
+            st.session_state.authenticated = True
+            st.session_state.username = username
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+
+    st.stop()
+
+with st.sidebar:
+    st.title("Bereon")
+    st.caption("Aviation Intelligence Platform")
+    st.success(f"Logged in as: {st.session_state.username}")
+
+    st.markdown("---")
+
+    if st.button("Logout"):
+        st.session_state.authenticated = False
+        st.session_state.username = ""
+        st.rerun()
+
+    st.markdown("---")
+    st.caption("Internal Use Only")
+
+
+# ----------------------------
+# DATA HELPERS
+# ----------------------------
 
 def read_csv_backend(filename):
     path = DATA_DIR / filename
@@ -22,7 +74,7 @@ def read_csv_backend(filename):
 
     try:
         df = pd.read_csv(path, low_memory=False, encoding="utf-8")
-    except:
+    except Exception:
         df = pd.read_csv(path, low_memory=False, encoding="latin1")
 
     df = df.fillna("")
@@ -36,7 +88,7 @@ def read_uploaded_csv(uploaded_file):
 
     try:
         df = pd.read_csv(uploaded_file, low_memory=False, encoding="utf-8")
-    except:
+    except Exception:
         uploaded_file.seek(0)
         df = pd.read_csv(uploaded_file, low_memory=False, encoding="latin1")
 
@@ -83,10 +135,6 @@ def load_ils_vendors(uploaded_ils):
     return vendors
 
 
-def rows_for_part(index, part):
-    return list(index.get(part.strip().upper(), []))
-
-
 def internal_history_text(po_rows, sales_rows, part):
     po_index = engine.build_part_index(po_rows, engine.PART_FIELD_NAMES)
     sales_index = engine.build_part_index(sales_rows, engine.PART_FIELD_NAMES)
@@ -94,17 +142,21 @@ def internal_history_text(po_rows, sales_rows, part):
     po_matches = engine.get_purchase_history_matches(po_index, part)
     sales_matches = engine.get_sales_history_matches(sales_index, part)
 
-    combined = defaultdict(lambda: {
-        "po": [],
-        "sales": [],
-        "vendors": [],
-        "tagged_by": [],
-    })
+    combined = defaultdict(
+        lambda: {
+            "po": [],
+            "sales": [],
+            "vendors": [],
+            "tagged_by": [],
+        }
+    )
 
     for row in po_matches:
         cond = engine.row_condition(row) or "UNK"
         price = engine.row_price(row, "buy")
-        vendor = engine.normalize_vendor(engine.find_value(row, engine.INVENTORY_VENDOR_FIELD_NAMES + ["VENDOR"]))
+        vendor = engine.normalize_vendor(
+            engine.find_value(row, engine.INVENTORY_VENDOR_FIELD_NAMES + ["VENDOR"])
+        )
 
         if price:
             combined[cond]["po"].append(price)
@@ -217,8 +269,11 @@ def run_bereon_report(part, outgoing_rows, incoming_rows, po_rows, sales_rows, i
     return "\n".join(sections)
 
 
+# ----------------------------
+# MAIN APP
+# ----------------------------
+
 def main():
-    st.sidebar.title("Bereon")
     page = st.sidebar.radio("Navigation", ["Bereon Intelligence Search", "Settings"])
 
     if page == "Settings":
@@ -232,9 +287,12 @@ def main():
             "DATA/sales_orders.csv\n"
             "Optional ILS .txt files in DATA/"
         )
+
+        st.markdown("---")
+        st.caption("Bereon Aviation Intelligence Platform | Internal Use Only | Support Air")
         return
 
-    st.title("Bereon Intelligence Search")
+    st.title("Bereon Aviation Intelligence Platform")
     st.caption("Real Support Air engine connected to Streamlit.")
 
     with st.expander("File inputs", expanded=False):
@@ -261,6 +319,8 @@ def main():
     part = st.text_input("Enter exact part number", placeholder="3202222-1")
 
     if not part:
+        st.markdown("---")
+        st.caption("Bereon Aviation Intelligence Platform | Internal Use Only | Support Air")
         return
 
     report = run_bereon_report(
@@ -277,6 +337,9 @@ def main():
 
     with st.expander("Raw engine output text"):
         st.text(report)
+
+    st.markdown("---")
+    st.caption("Bereon Aviation Intelligence Platform | Internal Use Only | Support Air")
 
 
 if __name__ == "__main__":
