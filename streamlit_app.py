@@ -346,9 +346,6 @@ def main():
     st.subheader("Bereon Report")
     st.code(report)
 
-    with st.expander("Raw engine output text"):
-        st.text(report)
-
     st.markdown("---")
     st.caption("© 2026 Bereon Aviation | Aviation Intelligence Platform | Internal Use Only")
 
