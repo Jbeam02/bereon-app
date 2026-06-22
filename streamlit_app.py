@@ -18,6 +18,12 @@ USERS = {
 }
 
 DATA_DIR = Path("DATA")
+LOGO_PATH = Path("logo.png")
+
+
+def show_logo(width=450):
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), width=width)
 
 
 # ----------------------------
@@ -31,6 +37,8 @@ if "username" not in st.session_state:
     st.session_state.username = ""
 
 if not st.session_state.authenticated:
+    show_logo(width=500)
+
     st.title("Bereon Aviation Intelligence Platform")
     st.caption("Internal Procurement Intelligence System")
 
@@ -48,7 +56,7 @@ if not st.session_state.authenticated:
     st.stop()
 
 with st.sidebar:
-    st.title("Bereon")
+    show_logo(width=220)
     st.caption("Aviation Intelligence Platform")
     st.success(f"Logged in as: {st.session_state.username}")
 
@@ -277,6 +285,7 @@ def main():
     page = st.sidebar.radio("Navigation", ["Bereon Intelligence Search", "Settings"])
 
     if page == "Settings":
+        show_logo(width=450)
         st.title("Settings")
         st.write("Backend engine: `bereon_engine.py`")
         st.write("Backend files:")
@@ -289,11 +298,13 @@ def main():
         )
 
         st.markdown("---")
-        st.caption("Bereon Aviation Intelligence Platform | Internal Use Only | Support Air")
+        st.caption("© 2026 Bereon Aviation | Aviation Intelligence Platform | Internal Use Only")
         return
 
+    show_logo(width=450)
+
     st.title("Bereon Aviation Intelligence Platform")
-    st.caption("Real Support Air engine connected to Streamlit.")
+    st.caption("Aviation Procurement Intelligence Platform")
 
     with st.expander("File inputs", expanded=False):
         c1, c2 = st.columns(2)
@@ -320,7 +331,7 @@ def main():
 
     if not part:
         st.markdown("---")
-        st.caption("Bereon Aviation Intelligence Platform | Internal Use Only | Support Air")
+        st.caption("© 2026 Bereon Aviation | Aviation Intelligence Platform | Internal Use Only")
         return
 
     report = run_bereon_report(
@@ -339,7 +350,7 @@ def main():
         st.text(report)
 
     st.markdown("---")
-    st.caption("Bereon Aviation Intelligence Platform | Internal Use Only | Support Air")
+    st.caption("© 2026 Bereon Aviation | Aviation Intelligence Platform | Internal Use Only")
 
 
 if __name__ == "__main__":
