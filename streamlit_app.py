@@ -39,8 +39,8 @@ if "username" not in st.session_state:
 if not st.session_state.authenticated:
     show_logo(width=500)
 
-    st.title("Bereon Aviation Intelligence Platform")
-    st.caption("Internal Procurement Intelligence System")
+    st.subheader("Aviation Procurement Intelligence Platform")
+    st.caption("Market Intelligence • Vendor Discovery • Pricing Guidance")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
