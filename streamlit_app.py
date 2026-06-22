@@ -303,8 +303,8 @@ def main():
 
     show_logo(width=450)
 
-    st.title("Bereon Aviation Intelligence Platform")
-    st.caption("Aviation Procurement Intelligence Platform")
+    st.subheader("Aviation Procurement Intelligence Platform")
+    st.caption("Market Intelligence • Vendor Discovery • Pricing Guidance")
 
     with st.expander("File inputs", expanded=False):
         c1, c2 = st.columns(2)
